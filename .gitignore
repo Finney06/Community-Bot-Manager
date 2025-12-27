@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# WhatsApp session data
+.wwebjs_auth/
+.wwebjs_cache/
+
+# Configuration and Persistence (contains sensitive group-specific data)
+data/
+config/config.json
+
+# Logs
+*.log
+logs/
+
+# Environment variables
+.env
+.env.local
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

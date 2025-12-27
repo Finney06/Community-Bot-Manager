@@ -1,0 +1,260 @@
+/**
+ * Group Manager
+ * Handles automatic group discovery and registration
+ */
+
+import { saveGroup, getGroup, logBotEvent } from '../storage/storage.js';
+import { getDefaultConfig } from '../config/defaults.js';
+import { logger } from '../utils/logger.js';
+import { safeGetContactById } from '../utils/contactUtils.js';
+
+/**
+ * Handle when bot is added to a group
+ * Automatically registers the group and notifies admins
+ */
+export async function handleGroupJoin(notification, client) {
+    try {
+        const chat = await notification.getChat();
+
+        if (!chat.isGroup) {
+            return;
+        }
+
+        const groupId = chat.id._serialized;
+        const groupName = chat.name;
+
+        logger.info(`Bot added to group: ${groupName} (${groupId})`);
+
+        // Check if group already registered
+        const existingGroup = getGroup(groupId);
+        if (existingGroup) {
+            logger.info(`Group ${groupName} already registered`);
+            return;
+        }
+
+        // Get group admins
+        const admins = chat.participants
+            .filter(p => p.isAdmin || p.isSuperAdmin)
+            .map(p => p.id._serialized);
+
+        logger.info(`Found ${admins.length} admins in ${groupName}`);
+
+        // Create group data with default config
+        const groupData = {
+            id: groupId,
+            name: groupName,
+            admins: admins,
+            config: getDefaultConfig(groupId, groupName),
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+        };
+
+        // Save to storage
+        const success = saveGroup(groupId, groupData);
+
+        if (!success) {
+            logger.error(`Failed to register group ${groupName}`);
+            return;
+        }
+
+        logger.success(`✅ Group registered: ${groupName}`);
+
+        // Log the event
+        logBotEvent('group_joined', {
+            groupId,
+            groupName,
+            adminCount: admins.length
+        });
+
+        // Send DM to all admins
+        await notifyAdmins(admins, groupName, client);
+
+    } catch (error) {
+        logger.error('Error handling group join:', error);
+    }
+}
+
+/**
+ * Notify group admins that bot is active
+ */
+async function notifyAdmins(adminIds, groupName, client) {
+    const welcomeMessage = `👋 *WhatsApp Community Manager Bot*
+
+Hello! I've been added to your group *${groupName}* and I'm ready to help you manage your community.
+
+🤖 *What I Do:*
+• Detect and warn spam/flooding
+• Enforce group rules
+• Welcome new members
+• Help with moderation
+
+⚙️ *Configuration:*
+All settings are managed via DM (Direct Message) with me. To get started:
+
+1. Send me \`setup\` in this chat
+2. Select your group from the list
+3. Configure settings for that group
+
+*Current Settings:*
+✅ Spam detection enabled
+✅ Welcome messages enabled
+❌ Link blocking disabled (you can enable it)
+
+📋 *Quick Commands:*
+• \`setup\` - Select a group to configure
+• \`help\` - See all available commands
+• \`stats\` - View group statistics
+
+Feel free to reach out if you need help! 🙏
+
+_Note: Make sure I'm a group admin for full moderation features._`;
+
+    for (const adminId of adminIds) {
+        try {
+            const contact = await safeGetContactById(client, adminId);
+            await contact.sendMessage(welcomeMessage);
+            logger.info(`Welcome DM sent to admin: ${contact.pushname || adminId}`);
+        } catch (error) {
+            logger.error(`Failed to send welcome DM to admin ${adminId}:`, error);
+        }
+    }
+}
+
+/**
+ * Handle when bot is removed from a group
+ */
+export async function handleGroupLeave(notification, client) {
+    try {
+        const chat = await notification.getChat();
+
+        if (!chat.isGroup) {
+            return;
+        }
+
+        const groupId = chat.id._serialized;
+        const groupName = chat.name;
+
+        logger.info(`Bot removed from group: ${groupName} (${groupId})`);
+
+        // Log the event (we keep the data for now, don't delete)
+        logBotEvent('group_left', {
+            groupId,
+            groupName
+        });
+
+        // Optionally: Mark group as inactive instead of deleting
+        const group = getGroup(groupId);
+        if (group) {
+            group.active = false;
+            group.leftAt = new Date().toISOString();
+            saveGroup(groupId, group);
+        }
+
+    } catch (error) {
+        logger.error('Error handling group leave:', error);
+    }
+}
+
+/**
+ * Update group admins list
+ * Call this periodically or when admin changes are detected
+ */
+export async function updateGroupAdmins(groupId, client) {
+    try {
+        const group = getGroup(groupId);
+        if (!group) {
+            logger.warn(`Cannot update admins - group ${groupId} not found`);
+            return false;
+        }
+
+        // Get fresh chat data
+        const chat = await client.getChatById(groupId);
+
+        if (!chat.isGroup) {
+            return false;
+        }
+
+        // Get current admins
+        const admins = chat.participants
+            .filter(p => p.isAdmin || p.isSuperAdmin)
+            .map(p => p.id._serialized);
+
+        // Update group data
+        group.admins = admins;
+        group.updatedAt = new Date().toISOString();
+
+        const success = saveGroup(groupId, group);
+
+        if (success) {
+            logger.info(`Updated admins for group ${group.name}: ${admins.length} admins`);
+        }
+
+        return success;
+    } catch (error) {
+        logger.error('Error updating group admins:', error);
+        return false;
+    }
+}
+
+/**
+ * Sync all groups the bot is currently in
+ * Useful for initial setup or after bot restart
+ */
+export async function syncAllGroups(client) {
+    try {
+        logger.info('Syncing all groups...');
+
+        const chats = await client.getChats();
+        const groups = chats.filter(chat => chat.isGroup);
+
+        logger.info(`Found ${groups.length} groups`);
+
+        let newGroups = 0;
+        let updatedGroups = 0;
+
+        for (const chat of groups) {
+            const groupId = chat.id._serialized;
+            const existingGroup = getGroup(groupId);
+
+            const admins = chat.participants
+                .filter(p => p.isAdmin || p.isSuperAdmin)
+                .map(p => p.id._serialized);
+
+            if (!existingGroup) {
+                // New group - register it
+                const groupData = {
+                    id: groupId,
+                    name: chat.name,
+                    admins: admins,
+                    config: getDefaultConfig(groupId, chat.name),
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString()
+                };
+
+                saveGroup(groupId, groupData);
+                newGroups++;
+                logger.info(`Registered new group: ${chat.name}`);
+            } else {
+                // Existing group - update admins and name
+                existingGroup.name = chat.name;
+                existingGroup.admins = admins;
+                existingGroup.active = true;
+                existingGroup.updatedAt = new Date().toISOString();
+
+                saveGroup(groupId, existingGroup);
+                updatedGroups++;
+            }
+        }
+
+        logger.success(`✅ Group sync complete: ${newGroups} new, ${updatedGroups} updated`);
+
+        return {
+            total: groups.length,
+            newGroups,
+            updatedGroups
+        };
+    } catch (error) {
+        logger.error('Error syncing groups:', error);
+        return null;
+    }
+}
