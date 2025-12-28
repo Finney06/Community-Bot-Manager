@@ -46,6 +46,7 @@ async function main() {
             logger.info('');
             logger.info('Syncing groups...');
             await syncAllGroups(client);
+
             logger.info('');
             logger.success('✅ Bot is fully operational!');
         });

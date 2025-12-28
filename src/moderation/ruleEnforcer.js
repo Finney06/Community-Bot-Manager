@@ -68,7 +68,19 @@ function checkOffTopic(messageBody, offTopicConfig) {
  */
 async function handleRuleViolation(message, chat, reason) {
     try {
-        const contact = await message.getContact();
+        // Get contact safely with fallback
+        let contact;
+        try {
+            contact = await message.getContact();
+        } catch (error) {
+            logger.warn(`Could not resolve contact for ${message.author || message.from}: ${error.message}`);
+            // Use fallback contact info
+            contact = {
+                pushname: 'User',
+                number: (message.author || message.from).split('@')[0],
+                id: { _serialized: message.author || message.from }
+            };
+        }
         const userName = getUserName(contact);
         const config = getGroupConfig(chat.id._serialized, chat.name);
 

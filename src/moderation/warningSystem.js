@@ -43,6 +43,11 @@ export async function addWarning(groupId, userId, reason, client) {
         // Notify admins if threshold reached
         if (thresholdReached) {
             await notifyAdminsThresholdReached(groupId, userId, result.count, client);
+
+            // Check for Auto-Removal
+            if (group?.config?.moderation?.autoRemoveThresholdReached) {
+                await attemptAutoRemove(groupId, userId, client);
+            }
         }
 
         logger.info(`Warning added to user ${userId} in group ${groupId}. Count: ${result.count}/${threshold}`);
@@ -162,6 +167,49 @@ export async function sendGroupNotice(chat, userId, reason) {
 /**
  * Notify admins when user reaches warning threshold
  */
+/**
+ * Attempt to remove a user from a group
+ */
+async function attemptAutoRemove(groupId, userId, client) {
+    try {
+        const chat = await client.getChatById(groupId);
+        const contact = await safeGetContactById(client, userId);
+
+        // Check if bot is admin
+        const botNumber = client.info.wid._serialized;
+        const botParticipant = chat.participants.find(p => p.id._serialized === botNumber);
+
+        if (!botParticipant || (!botParticipant.isAdmin && !botParticipant.isSuperAdmin)) {
+            logger.warn(`Cannot auto-remove ${userId} - bot is not admin in ${chat.name}`);
+            return false;
+        }
+
+        logger.info(`Auto-removing user ${userId} from ${chat.name} (Threshold Reached)`);
+        await chat.removeParticipants([userId]);
+
+        // Notify admins about the removal
+        const adminMessage = `🛡️ *Auto-Removal Execution*
+        
+*User:* ${contact.pushname || contact.number}
+*Status:* Successfully removed from *${chat.name}* after reaching the strike limit.`;
+
+        const group = getGroup(groupId);
+        if (group && group.admins) {
+            for (const adminId of group.admins) {
+                try {
+                    const adminContact = await safeGetContactById(client, adminId);
+                    await adminContact.sendMessage(adminMessage);
+                } catch (e) { /* ignore individual failures */ }
+            }
+        }
+
+        return true;
+    } catch (error) {
+        logger.error('Error in auto-removal:', error);
+        return false;
+    }
+}
+
 async function notifyAdminsThresholdReached(groupId, userId, strikeCount, client) {
     try {
         const group = getGroup(groupId);
@@ -239,10 +287,12 @@ export function getGroupWarningStats(groupId) {
         }
 
         // Add recent warnings
-        stats.recentWarnings.push(...userWarnings.history.map(h => ({
-            userId,
-            ...h
-        })));
+        if (userWarnings.history && Array.isArray(userWarnings.history)) {
+            stats.recentWarnings.push(...userWarnings.history.map(h => ({
+                userId,
+                ...h
+            })));
+        }
     }
 
     // Sort recent warnings by timestamp

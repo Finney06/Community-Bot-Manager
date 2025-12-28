@@ -13,6 +13,8 @@ import {
     handleGroupSelection,
     isPotentialGroupSelection
 } from './adminContext.js';
+import { handleOnboardingMessage } from './onboardingHandler.js';
+import { handleEveryoneCommand } from '../commands/everyone.js';
 import * as dmCommands from '../commands/dmCommands.js';
 
 /**
@@ -54,6 +56,13 @@ export async function handleMessage(message, client) {
         // Handle commands
         if (isCommand(message.body)) {
             await handleCommand(message, client);
+            return;
+        }
+
+        // Handle @everyone keyword (not a prefix command)
+        if (message.body.toLowerCase().includes('@everyone')) {
+            logger.info(`Detected @everyone keyword in ${chat.name}`);
+            await handleEveryoneCommand(message, chat, client);
             return;
         }
 
@@ -101,6 +110,12 @@ async function handleDMMessage(message, client) {
 
     logger.info(`DM from ${contact.pushname || contact.number}: ${messageBody.substring(0, 50)}`);
 
+    // Priority 1: Handle onboarding if session exists
+    const onboardingHandled = await handleOnboardingMessage(message, client);
+    if (onboardingHandled) {
+        return;
+    }
+
     // Handle setup command
     if (messageBody.toLowerCase() === 'setup') {
         await handleSetupCommand(message, client);
@@ -124,7 +139,8 @@ async function handleDMMessage(message, client) {
     const validCommands = [
         'stats', 'settings', 'toggle_links', 'toggle_welcome',
         'set_threshold', 'add_banned_word', 'remove_banned_word',
-        'list_banned_words', 'view_rules', 'add_rule', 'remove_rule', 'help'
+        'list_banned_words', 'view_rules', 'add_rule', 'remove_rule', 'help',
+        'restart_onboarding', 'toggle_auto_remove'
     ];
 
     // Only respond if it's a valid command
@@ -182,6 +198,14 @@ async function handleDMMessage(message, client) {
 
         case 'help':
             await dmCommands.handleDMHelpCommand(message, client);
+            break;
+
+        case 'restart_onboarding':
+            await dmCommands.handleRestartOnboardingCommand(message, client);
+            break;
+
+        case 'toggle_auto_remove':
+            await dmCommands.handleToggleAutoRemoveCommand(message, client);
             break;
     }
 }

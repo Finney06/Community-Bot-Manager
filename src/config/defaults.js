@@ -35,7 +35,16 @@ export const DEFAULT_CONFIG = {
         bannedWords: {
             enabled: false,
             words: []
-        }
+        },
+
+        // Auto-remove persistent violators (KICK)
+        autoRemoveThresholdReached: false // Disabled by default for safety
+    },
+
+    // Feature toggles for extra utilities
+    features: {
+        everyoneEnabled: true,      // Allow @everyone command (admin only)
+        everyoneCooldown: 3600000 // 1 hour cooldown for @everyone
     },
 
     // Welcome message settings

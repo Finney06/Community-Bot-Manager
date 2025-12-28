@@ -7,6 +7,7 @@ import { saveGroup, getGroup, logBotEvent } from '../storage/storage.js';
 import { getDefaultConfig } from '../config/defaults.js';
 import { logger } from '../utils/logger.js';
 import { safeGetContactById } from '../utils/contactUtils.js';
+import { startOnboarding } from './onboardingHandler.js';
 
 /**
  * Handle when bot is added to a group
@@ -46,7 +47,8 @@ export async function handleGroupJoin(notification, client) {
             admins: admins,
             config: getDefaultConfig(groupId, groupName),
             createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
+            updatedAt: new Date().toISOString(),
+            active: true
         };
 
         // Save to storage
@@ -66,8 +68,8 @@ export async function handleGroupJoin(notification, client) {
             adminCount: admins.length
         });
 
-        // Send DM to all admins
-        await notifyAdmins(admins, groupName, client);
+        // Send DM to all admins to start onboarding
+        await notifyAdmins(admins, groupData, client);
 
     } catch (error) {
         logger.error('Error handling group join:', error);
@@ -75,9 +77,9 @@ export async function handleGroupJoin(notification, client) {
 }
 
 /**
- * Notify group admins that bot is active
+ * Notify group admins and start onboarding
  */
-async function notifyAdmins(adminIds, groupName, client) {
+async function notifyAdmins(adminIds, groupData, client) {
     const welcomeMessage = `👋 *WhatsApp Community Manager Bot*
 
 Hello! I've been added to your group *${groupName}* and I'm ready to help you manage your community.
@@ -111,11 +113,11 @@ _Note: Make sure I'm a group admin for full moderation features._`;
 
     for (const adminId of adminIds) {
         try {
-            const contact = await safeGetContactById(client, adminId);
-            await contact.sendMessage(welcomeMessage);
-            logger.info(`Welcome DM sent to admin: ${contact.pushname || adminId}`);
+            // Trigger the guided onboarding flow
+            await startOnboarding(adminId, groupData.id, client);
+            logger.info(`Onboarding started for admin: ${adminId}`);
         } catch (error) {
-            logger.error(`Failed to send welcome DM to admin ${adminId}:`, error);
+            logger.error(`Failed to start onboarding for admin ${adminId}:`, error);
         }
     }
 }
@@ -202,59 +204,91 @@ export async function updateGroupAdmins(groupId, client) {
  */
 export async function syncAllGroups(client) {
     try {
-        logger.info('Syncing all groups...');
+        logger.info('Starting comprehensive group sync...');
 
         const chats = await client.getChats();
         const groups = chats.filter(chat => chat.isGroup);
 
-        logger.info(`Found ${groups.length} groups`);
+        logger.info(`Found ${groups.length} total groups in WhatsApp account`);
 
         let newGroups = 0;
         let updatedGroups = 0;
+        let skippedGroups = 0;
 
         for (const chat of groups) {
-            const groupId = chat.id._serialized;
-            const existingGroup = getGroup(groupId);
+            try {
+                const groupId = chat.id._serialized;
+                const existingGroup = getGroup(groupId);
 
-            const admins = chat.participants
-                .filter(p => p.isAdmin || p.isSuperAdmin)
-                .map(p => p.id._serialized);
+                // Fetch full chat to ensure participants are loaded
+                // This is a slow but reliable process for initial sync
+                const fullChat = await client.getChatById(groupId);
 
-            if (!existingGroup) {
-                // New group - register it
-                const groupData = {
-                    id: groupId,
-                    name: chat.name,
-                    admins: admins,
-                    config: getDefaultConfig(groupId, chat.name),
-                    createdAt: new Date().toISOString(),
-                    updatedAt: new Date().toISOString()
-                };
+                // If participants are empty, try to force-load them
+                if (!fullChat.participants || fullChat.participants.length === 0) {
+                    // Small delay to let the library catch up
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    try {
+                        // Fetching recent messages often triggers participant loading
+                        await fullChat.fetchMessages({ limit: 1 });
+                    } catch (e) { }
+                }
 
-                saveGroup(groupId, groupData);
-                newGroups++;
-                logger.info(`Registered new group: ${chat.name}`);
-            } else {
-                // Existing group - update admins and name
-                existingGroup.name = chat.name;
-                existingGroup.admins = admins;
-                existingGroup.active = true;
-                existingGroup.updatedAt = new Date().toISOString();
+                const admins = (fullChat.participants || [])
+                    .filter(p => p.isAdmin || p.isSuperAdmin)
+                    .map(p => p.id._serialized);
 
-                saveGroup(groupId, existingGroup);
-                updatedGroups++;
+                // Only register groups where we can actually see admins
+                // (If we can't see admins, we can't verify permissions)
+                if (admins.length > 0) {
+                    if (!existingGroup) {
+                        // New group - register it
+                        const groupData = {
+                            id: groupId,
+                            name: fullChat.name || chat.name,
+                            admins: admins,
+                            config: getDefaultConfig(groupId, fullChat.name || chat.name),
+                            createdAt: new Date().toISOString(),
+                            updatedAt: new Date().toISOString(),
+                            active: true
+                        };
+
+                        saveGroup(groupId, groupData);
+                        newGroups++;
+                        logger.info(`Registered: "${fullChat.name || chat.name}" (${admins.length} admins)`);
+                    } else {
+                        // Existing group - update admins and name
+                        existingGroup.name = fullChat.name || chat.name;
+                        existingGroup.admins = admins;
+                        existingGroup.active = true;
+                        existingGroup.updatedAt = new Date().toISOString();
+
+                        saveGroup(groupId, existingGroup);
+                        updatedGroups++;
+                    }
+                } else {
+                    skippedGroups++;
+                    // We don't log every skip to avoid flooding the console
+                }
+
+                // Substantial delay between groups for large accounts to avoid being blocked
+                await new Promise(resolve => setTimeout(resolve, 200));
+
+            } catch (err) {
+                logger.error(`Error syncing group ${chat.name}: ${err.message}`);
             }
         }
 
-        logger.success(`✅ Group sync complete: ${newGroups} new, ${updatedGroups} updated`);
+        logger.success(`✅ Sync complete: ${newGroups} new, ${updatedGroups} updated, ${skippedGroups} skipped (no admins detected)`);
 
         return {
             total: groups.length,
             newGroups,
-            updatedGroups
+            updatedGroups,
+            skippedGroups
         };
     } catch (error) {
-        logger.error('Error syncing groups:', error);
+        logger.error('Fatal error during group sync:', error);
         return null;
     }
 }

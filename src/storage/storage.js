@@ -15,12 +15,14 @@ const DATA_DIR = path.join(__dirname, '../../data');
 const GROUPS_FILE = path.join(DATA_DIR, 'groups.json');
 const WARNINGS_FILE = path.join(DATA_DIR, 'warnings.json');
 const ADMIN_SESSIONS_FILE = path.join(DATA_DIR, 'admin_sessions.json');
+const ONBOARDING_SESSIONS_FILE = path.join(DATA_DIR, 'onboarding_sessions.json');
 const LOGS_FILE = path.join(DATA_DIR, 'logs.jsonl'); // JSON Lines format
 
-// In-memory caches
-let groupsCache = {};
-let warningsCache = {};
-let adminSessionsCache = {};
+// In-memory caches (exported for handlers to manage temporal session state)
+export let groupsCache = {};
+export let warningsCache = {};
+export let adminSessionsCache = {};
+export let onboardingSessionsCache = {};
 
 /**
  * Ensure data directory exists
@@ -78,6 +80,7 @@ export function initStorage() {
     groupsCache = safeReadJSON(GROUPS_FILE, {});
     warningsCache = safeReadJSON(WARNINGS_FILE, {});
     adminSessionsCache = safeReadJSON(ADMIN_SESSIONS_FILE, {});
+    onboardingSessionsCache = safeReadJSON(ONBOARDING_SESSIONS_FILE, {});
 
     console.log('✅ Storage system initialized');
 }
@@ -272,6 +275,40 @@ export function getAllAdminSessions() {
     return { ...adminSessionsCache };
 }
 
+// ============================================================================
+// ONBOARDING SESSION OPERATIONS
+// ============================================================================
+
+/**
+ * Get onboarding session for an admin
+ */
+export function getOnboardingSession(adminId) {
+    return onboardingSessionsCache[adminId] || null;
+}
+
+/**
+ * Set onboarding session for an admin
+ */
+export function setOnboardingSession(adminId, sessionData) {
+    onboardingSessionsCache[adminId] = {
+        ...sessionData,
+        lastUpdated: new Date().toISOString()
+    };
+
+    return safeWriteJSON(ONBOARDING_SESSIONS_FILE, onboardingSessionsCache);
+}
+
+/**
+ * Clear onboarding session for an admin
+ */
+export function clearOnboardingSession(adminId) {
+    if (!onboardingSessionsCache[adminId]) {
+        return false;
+    }
+
+    delete onboardingSessionsCache[adminId];
+    return safeWriteJSON(ONBOARDING_SESSIONS_FILE, onboardingSessionsCache);
+}
 // ============================================================================
 // LOGGING OPERATIONS
 // ============================================================================

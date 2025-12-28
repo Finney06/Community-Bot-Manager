@@ -11,6 +11,7 @@ import {
 import { updateGroup, logAdminCommand } from '../storage/storage.js';
 import { logger } from '../utils/logger.js';
 import { getGroupWarningStats } from '../moderation/warningSystem.js';
+import { startOnboarding } from '../handlers/onboardingHandler.js';
 
 /**
  * Handle stats command - show group statistics
@@ -35,23 +36,24 @@ export async function handleStatsCommand(message, client) {
         const adminCount = chat.participants.filter(p => p.isAdmin || p.isSuperAdmin).length;
 
         const statsMessage = `📊 *Group Statistics*
+──────────────────
+👥 *Community:* ${group.name}
+━━━━━━━━━━━━━━━━━━
 
-*Group:* ${group.name}
-*Members:* ${memberCount}
-*Admins:* ${adminCount}
+📈 *Engagement:*
+• Total Members: *${memberCount}*
+• Active Admins: *${adminCount}*
 
-*Moderation Stats:*
-• Total warnings issued: ${warningStats.totalWarnings}
-• Users with warnings: ${warningStats.totalUsers}
-• Users at threshold: ${warningStats.usersAtThreshold}
+🛡️ *Moderation:*
+• Warnings Issued: *${warningStats.totalWarnings}*
+• Restricted Users: *${warningStats.usersAtThreshold}*
 
-*Bot Settings:*
-• Spam Detection: ${group.config.moderation.spamDetection.enabled ? '✅' : '❌'}
-• Link Blocking: ${group.config.moderation.spamDetection.linkBlockingEnabled ? '✅' : '❌'}
-• Welcome Messages: ${group.config.welcome.enabled ? '✅' : '❌'}
-• Warning Threshold: ${group.config.moderation.maxWarningsBeforeAction}
+⚙️ *Protection Status:*
+• Spam Filter: ${group.config.moderation.spamDetection.enabled ? '✅' : '❌'}
+• Link Block: ${group.config.moderation.spamDetection.linkBlockingEnabled ? '✅' : '❌'}
+• Threshold: *${group.config.moderation.maxWarningsBeforeAction} strikes*
 
-Send \`settings\` for detailed configuration.`;
+_Type \`settings\` for a full configuration breakdown._`;
 
         await message.reply(statsMessage);
         logAdminCommand(group.id, adminId, 'stats', []);
@@ -77,32 +79,28 @@ export async function handleSettingsCommand(message, client) {
     const config = group.config;
 
     const settingsMessage = `⚙️ *Group Settings*
+──────────────────
+👥 *Community:* ${group.name}
+━━━━━━━━━━━━━━━━━━
 
-*Group:* ${group.name}
+🛡️ *Moderation Enforcement:*
+• Spam Filtering: ${config.moderation.spamDetection.enabled ? '✅ *ON*' : '❌ *OFF*'}
+• Link Blocking: ${config.moderation.spamDetection.linkBlockingEnabled ? '✅ *ON*' : '❌ *OFF*'}
+• Auto-Removal: ${config.moderation.autoRemoveThresholdReached ? '✅ *ON*' : '❌ *OFF*'}
+• Warning Strike Limit: *${config.moderation.maxWarningsBeforeAction}*
 
-*Moderation:*
-• Spam Detection: ${config.moderation.spamDetection.enabled ? '✅' : '❌'}
-• Link Blocking: ${config.moderation.spamDetection.linkBlockingEnabled ? '✅' : '❌'}
-• Max Messages/Min: ${config.moderation.spamDetection.maxMessagesPerMinute}
-• Max Repeated: ${config.moderation.spamDetection.maxRepeatedMessages}
-• Warning Threshold: ${config.moderation.maxWarningsBeforeAction}
+📋 *Banned Words:*
+• Filter Status: ${config.moderation.bannedWords.enabled ? '✅ *ON*' : '❌ *OFF*'}
+• Word Count: *${config.moderation.bannedWords.words.length}*
 
-*Welcome System:*
-• Enabled: ${config.welcome.enabled ? '✅' : '❌'}
+👋 *Member Welcome:*
+• Join Notifications: ${config.welcome.enabled ? '✅ *ON*' : '❌ *OFF*'}
 
-*Banned Words:*
-• Count: ${config.moderation.bannedWords.words.length}
-• Enabled: ${config.moderation.bannedWords.enabled ? '✅' : '❌'}
+📜 *Community Rules:*
+${config.rules.length > 0 ? config.rules.map((rule, i) => `${i + 1}. ${rule}`).join('\n') : '_No rules set yet._'}
 
-*Group Rules:*
-${config.rules.map((rule, i) => `${i + 1}. ${rule}`).join('\n')}
-
-*Commands to modify:*
-• \`toggle_links\` - Toggle link blocking
-• \`toggle_welcome\` - Toggle welcome messages
-• \`set_threshold <number>\` - Set warning threshold
-• \`add_banned_word <word>\` - Add banned word
-• \`add_rule <rule>\` - Add a rule`;
+━━━━━━━━━━━━━━━━━━
+💡 *Quick Edit:* Use \`help\` to see the list of commands to modify these settings.`;
 
     await message.reply(settingsMessage);
     logAdminCommand(group.id, adminId, 'settings', []);
@@ -388,34 +386,47 @@ export async function handleRemoveRuleCommand(message, args, client) {
  * Handle help command for DM
  */
 export async function handleDMHelpCommand(message, client) {
-    const helpMessage = `📋 *WhatsApp Community Manager - DM Commands*
+    const helpMessage = `📋 *Control Panel*
+────────────────────
+⚙️ *Setup & Guide:*
+• \`setup\` - Switch group / List all
+• \`restart_onboarding\` - Restart guide
 
-*Setup:*
-• \`setup\` - Select a group to configure
+📊 *Monitoring:*
+• \`stats\` - Engagement & moderation
+• \`settings\` - View current config
+• \`view_rules\` - Group rule list
+• \`list_banned_words\` - Filtered words
 
-*View Information:*
-• \`stats\` - View group statistics
-• \`settings\` - View all settings
-• \`view_rules\` - View group rules
-• \`list_banned_words\` - List banned words
+🛡️ *Quick Toggles:*
+• \`toggle_links\` - Block/Allow links
+• \`toggle_welcome\` - Join greetings
+• \`toggle_auto_remove\` - Threshold KICK
+• \`set_threshold <number>\` - Strike limit
 
-*Configuration:*
-• \`toggle_links\` - Enable/disable link blocking
-• \`toggle_welcome\` - Enable/disable welcome messages
-• \`set_threshold <number>\` - Set warning threshold (1-10)
+📝 *Content Management:*
+• \`add_rule <text>\` - New group rule
+• \`remove_rule <id>\` - Remove by number
+• \`add_banned_word <w>\` - Blacklist word
+• \`remove_banned_word <w>\` - Whitelist word
 
-*Rules Management:*
-• \`add_rule <rule>\` - Add a group rule
-• \`remove_rule <number>\` - Remove a rule
-
-*Banned Words:*
-• \`add_banned_word <word>\` - Add banned word
-• \`remove_banned_word <word>\` - Remove banned word
-
-*Other:*
-• \`help\` - Show this help message
-
-_Note: All commands require you to select a group first using \`setup\`_`;
+━━━━━━━━━━━━━━━━━━━━
+💡 *Tip:* All commands above apply to your currently selected group. Type \`setup\` to change groups.`;
 
     await message.reply(helpMessage);
+}
+
+/**
+ * Handle restart_onboarding command
+ */
+export async function handleRestartOnboardingCommand(message, client) {
+    const adminId = message.from;
+    const group = getActiveGroup(adminId);
+
+    if (!group) {
+        await message.reply('❌ Please select a group first using `setup`.');
+        return;
+    }
+
+    await startOnboarding(adminId, group.id, client);
 }

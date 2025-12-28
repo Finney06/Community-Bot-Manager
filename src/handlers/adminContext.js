@@ -8,16 +8,20 @@ import {
     setAdminContext,
     clearAdminContext,
     getGroupsByAdmin,
-    getGroup
+    getGroup,
+    getOnboardingSession,
+    adminSessionsCache
 } from '../storage/storage.js';
 import { logger } from '../utils/logger.js';
+import { startOnboarding } from './onboardingHandler.js';
 
 /**
- * Handle 'setup' command - show group selection
+ * Handle 'setup' command - show group selection with pagination
  */
-export async function handleSetupCommand(message, client) {
+export async function handleSetupCommand(message, client, page = 1) {
     try {
         const adminId = message.from;
+        const GROUPS_PER_PAGE = 10;
 
         // Get contact safely
         let contact;
@@ -31,7 +35,7 @@ export async function handleSetupCommand(message, client) {
             };
         }
 
-        logger.info(`Setup command from ${contact.pushname || adminId}`);
+        logger.info(`Setup command from ${contact.pushname || adminId} (Page ${page})`);
 
         // Get all groups where this user is an admin
         const groups = getGroupsByAdmin(adminId);
@@ -49,19 +53,41 @@ To use me:
             return;
         }
 
+        // If user is an admin but has never finished onboarding for ANY group, 
+        // OR if they specifically have an active onboarding session, use that.
+        // For now, let's keep it simple: if they only have one group and no session, 
+        // trigger onboarding for that group.
+        if (groups.length === 1 && page === 1) {
+            await startOnboarding(adminId, groups[0].id, client);
+            return;
+        }
+
+        // Pagination logic
+        const totalPages = Math.ceil(groups.length / GROUPS_PER_PAGE);
+        const startIdx = (page - 1) * GROUPS_PER_PAGE;
+        const endIdx = Math.min(startIdx + GROUPS_PER_PAGE, groups.length);
+        const pageGroups = groups.slice(startIdx, endIdx);
+
         // Create numbered list of groups
-        const groupList = groups
-            .map((group, index) => `${index + 1}. ${group.name}`)
+        const groupList = pageGroups
+            .map((group, index) => `${startIdx + index + 1}. ${group.name}`)
             .join('\n');
+
+        let paginationNotice = ``;
+        if (totalPages > 1) {
+            paginationNotice = `\n\n📄 *Page ${page} of ${totalPages}*
+Type \`next\` or \`prev\` to see more groups.`;
+        }
 
         const setupMessage = `⚙️ *Group Configuration Setup*
 
-You manage ${groups.length} group${groups.length > 1 ? 's' : ''} with me:
+You manage ${groups.length} group${groups.length > 1 ? 's' : ''} with me. 
+Select which group you want to configure:
 
-${groupList}
+${groupList}${paginationNotice}
 
 *To configure a group:*
-Reply with the number of the group you want to configure.
+Reply with the number of the group.
 
 Example: Send \`1\` to configure the first group.
 
@@ -69,8 +95,11 @@ _Your selection will remain active until you change it or send \`setup\` again._
 
         await message.reply(setupMessage);
 
-        // Store that user is in setup mode (temporary state)
-        // We'll handle their next message as a group selection
+        // Store page state in admin context
+        const currentContext = getAdminContext(adminId) || {};
+        setAdminContext(adminId, currentContext.activeGroupId || null);
+        // We'll use the cache to store temporal page state for the setup list
+        adminSessionsCache[adminId].setupPage = page;
 
     } catch (error) {
         logger.error('Error in setup command:', error);
@@ -79,22 +108,43 @@ _Your selection will remain active until you change it or send \`setup\` again._
 }
 
 /**
- * Handle group selection (when user sends a number)
+ * Handle group selection (when user sends a number or next/prev)
  */
 export async function handleGroupSelection(message, client) {
     try {
         const adminId = message.from;
-        const selection = parseInt(message.body.trim());
-
-        if (isNaN(selection)) {
-            return false; // Not a valid selection
-        }
+        const body = message.body.trim().toLowerCase();
 
         // Get admin's groups
         const groups = getGroupsByAdmin(adminId);
+        if (groups.length === 0) return false;
 
-        if (groups.length === 0) {
-            return false;
+        // Handle pagination commands
+        const context = getAdminContext(adminId) || {};
+        const currentPage = context.setupPage || 1;
+        const totalPages = Math.ceil(groups.length / 10);
+
+        if (body === 'next') {
+            if (currentPage < totalPages) {
+                await handleSetupCommand(message, client, currentPage + 1);
+            } else {
+                await message.reply('You are already on the last page.');
+            }
+            return true;
+        }
+
+        if (body === 'prev' || body === 'previous') {
+            if (currentPage > 1) {
+                await handleSetupCommand(message, client, currentPage - 1);
+            } else {
+                await message.reply('You are already on the first page.');
+            }
+            return true;
+        }
+
+        const selection = parseInt(body);
+        if (isNaN(selection)) {
+            return false; // Not a valid selection
         }
 
         // Check if selection is valid
@@ -125,22 +175,14 @@ You are now configuring: *${selectedGroup.name}*
 
 All commands you send will apply to this group until you change it.
 
-*Available Commands:*
-• \`stats\` - View group statistics
+*Common Tasks:*
 • \`settings\` - View current settings
-• \`add_banned_word <word>\` - Add banned word
-• \`remove_banned_word <word>\` - Remove banned word
-• \`list_banned_words\` - Show banned words
-• \`toggle_links\` - Enable/disable link blocking
-• \`toggle_welcome\` - Enable/disable welcome messages
-• \`set_threshold <number>\` - Set warning threshold
+• \`stats\` - View group statistics
 • \`view_rules\` - View group rules
-• \`add_rule <rule>\` - Add a rule
-• \`remove_rule <number>\` - Remove a rule
 • \`help\` - Show all commands
-• \`setup\` - Change to a different group
+• \`setup\` - Switch to another group
 
-Type \`help\` for detailed command information.`;
+_Type any command above to get started._`;
 
         await message.reply(confirmMessage);
 
@@ -184,11 +226,13 @@ export function clearContext(adminId) {
  * Prompt admin to select a group if no context is set
  */
 export async function promptGroupSelection(message) {
-    const noContextMessage = `⚠️ *No Group Selected*
+    const noContextMessage = `👋 *Welcome to Community Bot!*
 
-You haven't selected a group to configure yet.
+It looks like you haven't selected a group to configure yet. I support multi-group management, so you just need to tell me which group you want to manage.
 
-Send \`setup\` to see your groups and select one.`;
+Send \`setup\` to see a list of your groups and get started!
+
+_Once you select a group, I'll guide you through the setup._`;
 
     await message.reply(noContextMessage);
 }
