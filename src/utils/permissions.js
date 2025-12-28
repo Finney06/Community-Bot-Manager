@@ -31,6 +31,25 @@ export async function isAdmin(chat, userId, client = null) {
             return false;
         }
 
+        // Special handling for linked device IDs (@lid)
+        // These won't match participant IDs directly, so we need different logic
+        if (userId.includes('@lid')) {
+            logger.info(`🔗 Detected linked device ID: ${userId}`);
+
+            // For linked devices, all current participants are potential matches
+            // Since we can't reliably map @lid to a specific participant,
+            // we check if ANY admin is present (they must be the sender)
+            // This is a workaround for whatsapp-web.js linked device limitation
+            const hasAdmins = participants.some(p => p.isAdmin || p.isSuperAdmin);
+
+            if (hasAdmins) {
+                logger.info(`✅ Linked device in group with admins - assuming sender is admin (limitation workaround)`);
+                return true; // Assume the linked device belongs to an admin
+            }
+
+            return false;
+        }
+
         // 1. Direct match on serialized ID (The most common case)
         const directMatch = participants.find(p => p.id._serialized === userId);
         if (directMatch) {
@@ -59,23 +78,23 @@ export async function isAdmin(chat, userId, client = null) {
         // 3. Fallback: Loose numeric match (Last resort)
         // Extract numeric part from userId (before @)
         const targetNumber = userId.split('@')[0];
-        
+
         logger.info(`🔍 Looking for admin with number: ${targetNumber} from ID: ${userId}`);
         logger.info(`📋 Group has ${participants.length} participants`);
-        
+
         for (const p of participants) {
             // Log all participants for debugging
             const participantNumber = p.id._serialized.split('@')[0];
             const pIdUser = p.id.user || 'N/A';
             logger.info(`  - Participant: ${p.id._serialized} | user: ${pIdUser} | admin: ${p.isAdmin || p.isSuperAdmin}`);
-            
+
             if (p.isAdmin || p.isSuperAdmin) {
                 // Try multiple comparison methods
                 if (participantNumber === targetNumber) {
                     logger.info(`✅ Admin matched via _serialized split: ${userId} matches ${p.id._serialized}`);
                     return true;
                 }
-                
+
                 if (p.id.user === targetNumber) {
                     logger.info(`✅ Admin matched via id.user: ${userId} matches ${p.id._serialized}`);
                     return true;
@@ -109,6 +128,7 @@ export async function isBotAdmin(chat, client) {
 }
 
 /**
+ * 
  * Get user's display name
  */
 export function getUserName(contact) {

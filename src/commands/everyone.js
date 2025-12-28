@@ -15,7 +15,27 @@ const lastUsedCache = new Map();
  */
 export async function handleEveryoneCommand(message, chat, client) {
     const groupId = chat.id._serialized;
-    const authorId = message.author || message.from;
+    
+    // Get the actual sender ID - for linked devices, we need to find their real participant ID
+    let authorId = message.author || message.from;
+    
+    // If author looks like a linked device (@lid), try to find the actual participant
+    if (authorId.includes('@lid')) {
+        // Try to get the real sender from various message data sources
+        const realSender = message._data?.sender?.id || 
+                          message._data?.from || 
+                          message._data?.participant;
+        
+        if (realSender && !realSender.includes('@lid')) {
+            authorId = realSender;
+            logger.info(`✓ Resolved linked device ${message.author} to actual sender: ${authorId}`);
+        } else {
+            // Check if the message has sender information in the raw data
+            logger.info(`📱 Message._data keys: ${Object.keys(message._data || {}).join(', ')}`);
+            logger.warn(`⚠️ Could not resolve linked device ID, may cause permission issues: ${authorId}`);
+        }
+    }
+    
     const group = getGroup(groupId);
     logger.info(`Checking @everyone for group ${groupId} (Sender: ${authorId})`);
 

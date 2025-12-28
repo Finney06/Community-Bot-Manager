@@ -34,10 +34,13 @@ export async function handleMessage(message, client) {
         try {
             contact = await message.getContact();
         } catch (error) {
-            logger.warn('Could not get contact info, using fallback');
+            // Use message data directly as fallback
+            const senderId = message.author || message.from;
+            const senderNumber = senderId.split('@')[0];
             contact = {
-                pushname: 'Unknown',
-                number: message.from || 'unknown'
+                pushname: message._data?.notifyName || 'User',
+                number: senderNumber,
+                id: { _serialized: senderId }
             };
         }
 
@@ -101,10 +104,13 @@ async function handleDMMessage(message, client) {
     try {
         contact = await message.getContact();
     } catch (error) {
-        logger.warn('Could not get contact in DM, using fallback');
+        // Use message data directly as fallback
+        const senderId = message.from;
+        const senderNumber = senderId.split('@')[0];
         contact = {
-            pushname: 'Unknown',
-            number: message.from || 'unknown'
+            pushname: message._data?.notifyName || 'User',
+            number: senderNumber,
+            id: { _serialized: senderId }
         };
     }
 

@@ -13,15 +13,15 @@ export async function safeGetContactById(client, contactId) {
         const contact = await client.getContactById(contactId);
         return contact;
     } catch (error) {
-        logger.warn(`Could not get contact ${contactId}, using fallback`);
+        // Use ID-based fallback with number extraction
+        const number = contactId.split('@')[0];
         return {
             id: { _serialized: contactId },
-            pushname: 'User',
-            name: 'User',
-            number: contactId.split('@')[0],
+            pushname: number,
+            name: number,
+            number: number,
             isMyContact: false,
             sendMessage: async (content) => {
-                // Fallback: try to send via client
                 try {
                     await client.sendMessage(contactId, content);
                 } catch (err) {
@@ -40,12 +40,14 @@ export async function safeGetContact(message) {
         const contact = await message.getContact();
         return contact;
     } catch (error) {
-        logger.warn('Could not get contact from message, using fallback');
+        // Use message data directly as fallback
+        const senderId = message.author || message.from;
+        const number = senderId.split('@')[0];
         return {
-            id: { _serialized: message.from },
-            pushname: 'User',
-            name: 'User',
-            number: message.from ? message.from.split('@')[0] : 'unknown',
+            id: { _serialized: senderId },
+            pushname: message._data?.notifyName || number,
+            name: message._data?.notifyName || number,
+            number: number,
             isMyContact: false
         };
     }
