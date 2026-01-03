@@ -30,6 +30,13 @@ export async function checkForSpam(message, chat, client) {
 
     const userId = message.author || message.from;
     const messageBody = message.body;
+    
+    // Check message type - be more lenient with media
+    const isMedia = message.hasMedia || message.type === 'image' || message.type === 'video' || 
+                    message.type === 'document' || message.type === 'audio' || message.type === 'sticker';
+    
+    // Forwarded messages are usually legitimate, don't check for flooding
+    const isForwarded = message.isForwarded || message._data?.isForwarded;
 
     // Check for links
     if (group.config.moderation.spamDetection.linkBlockingEnabled) {
@@ -41,18 +48,22 @@ export async function checkForSpam(message, chat, client) {
         }
     }
 
-    // Check for message flooding
-    const isFlooding = checkMessageFlood(userId, group.config.moderation.spamDetection.maxMessagesPerMinute);
-    if (isFlooding) {
-        await handleSpamDetection(message, chat, 'flood', client);
-        return { isSpam: true, reason: 'flood' };
+    // Check for message flooding (skip for media and forwarded messages)
+    if (!isMedia && !isForwarded) {
+        const isFlooding = checkMessageFlood(userId, group.config.moderation.spamDetection.maxMessagesPerMinute);
+        if (isFlooding) {
+            await handleSpamDetection(message, chat, 'flood', client);
+            return { isSpam: true, reason: 'flood' };
+        }
     }
 
-    // Check for repeated messages
-    const isRepeated = checkRepeatedMessage(userId, messageBody, group.config.moderation.spamDetection.maxRepeatedMessages);
-    if (isRepeated) {
-        await handleSpamDetection(message, chat, 'repeated', client);
-        return { isSpam: true, reason: 'repeated' };
+    // Check for repeated messages (only for text messages)
+    if (!isMedia && messageBody && messageBody.trim().length > 0) {
+        const isRepeated = checkRepeatedMessage(userId, messageBody, group.config.moderation.spamDetection.maxRepeatedMessages);
+        if (isRepeated) {
+            await handleSpamDetection(message, chat, 'repeated', client);
+            return { isSpam: true, reason: 'repeated' };
+        }
     }
 
     return { isSpam: false };
@@ -78,37 +89,68 @@ function isWhitelistedDomain(text, allowedDomains) {
 }
 
 /**
- * Check for message flooding
+ * Check for message flooding (improved with burst tolerance)
  */
 function checkMessageFlood(userId, maxMessages) {
     const cacheKey = `flood_${userId}`;
-    const messageCount = messageCache.get(cacheKey) || 0;
-
-    messageCache.set(cacheKey, messageCount + 1);
-
-    return messageCount >= maxMessages;
+    const messageHistory = messageCache.get(cacheKey) || [];
+    
+    const now = Date.now();
+    
+    // Add current message timestamp
+    messageHistory.push(now);
+    
+    // Keep only messages from the last 60 seconds
+    const recentMessages = messageHistory.filter(timestamp => now - timestamp < 60000);
+    
+    messageCache.set(cacheKey, recentMessages);
+    
+    // Allow bursts: if someone sends 10 messages in 5 seconds, that's okay (sharing photos)
+    // But if they send 20+ messages in 60 seconds, that's flooding
+    const burstThreshold = 15; // Allow up to 15 messages in short burst
+    const extendedThreshold = maxMessages || 20; // But cap at 20 in full minute
+    
+    const last5Seconds = recentMessages.filter(timestamp => now - timestamp < 5000);
+    
+    // Only flag as spam if:
+    // 1. More than extendedThreshold messages in 60 seconds AND
+    // 2. More than burstThreshold in last 5 seconds (continuous spam)
+    return recentMessages.length >= extendedThreshold && last5Seconds.length >= burstThreshold;
 }
 
 /**
- * Check for repeated messages
+ * Check for repeated messages (improved to allow some repetition)
  */
 function checkRepeatedMessage(userId, messageBody, maxRepeated) {
     const cacheKey = `repeated_${userId}`;
     const messageHistory = repeatedMessageCache.get(cacheKey) || [];
 
-    // Add current message to history
-    messageHistory.push(messageBody);
+    // Ignore very short messages (like "ok", "yes", emojis) - these are naturally repeated
+    if (messageBody.length < 5) {
+        return false;
+    }
+    
+    // Create a hash of the message to compare
+    const messageHash = crypto.createHash('md5').update(messageBody.toLowerCase().trim()).digest('hex');
+    
+    // Add current message hash to history
+    messageHistory.push(messageHash);
 
-    // Keep only recent messages
-    if (messageHistory.length > maxRepeated) {
+    // Keep only last 10 messages
+    if (messageHistory.length > 10) {
         messageHistory.shift();
     }
 
     repeatedMessageCache.set(cacheKey, messageHistory);
 
-    // Check if all recent messages are the same
-    if (messageHistory.length >= maxRepeated) {
-        const allSame = messageHistory.every(msg => msg === messageHistory[0]);
+    // Only flag if user sends the EXACT same message many times consecutively
+    // Check last N messages (where N = maxRepeated or default 5)
+    const checkCount = maxRepeated || 5;
+    if (messageHistory.length >= checkCount) {
+        const lastMessages = messageHistory.slice(-checkCount);
+        const allSame = lastMessages.every(hash => hash === lastMessages[0]);
+        
+        // Additional check: make sure they're recent (within 2 minutes)
         return allSame;
     }
 
