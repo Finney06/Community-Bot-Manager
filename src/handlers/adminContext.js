@@ -28,7 +28,7 @@ export async function handleSetupCommand(message, client, page = 1) {
         try {
             contact = await message.getContact();
         } catch (error) {
-            logger.warn('Could not get contact in setup, using fallback');
+            // Using fallback contact info when getContact() fails (e.g., linked devices)
             contact = {
                 pushname: 'Admin',
                 number: adminId

@@ -36,17 +36,39 @@ export async function isAdmin(chat, userId, client = null) {
         if (userId.includes('@lid')) {
             logger.info(`🔗 Detected linked device ID: ${userId}`);
 
-            // For linked devices, all current participants are potential matches
-            // Since we can't reliably map @lid to a specific participant,
-            // we check if ANY admin is present (they must be the sender)
-            // This is a workaround for whatsapp-web.js linked device limitation
-            const hasAdmins = participants.some(p => p.isAdmin || p.isSuperAdmin);
-
-            if (hasAdmins) {
-                logger.info(`✅ Linked device in group with admins - assuming sender is admin (limitation workaround)`);
-                return true; // Assume the linked device belongs to an admin
+            // Extract the phone number from the linked device ID
+            // Format is typically: <number>@c.us@lid or <number>:<deviceId>@lid
+            const lidMatch = userId.match(/^(\d+)[@:]/);
+            
+            if (lidMatch) {
+                const phoneNumber = lidMatch[1];
+                logger.info(`📱 Extracted phone number from @lid: ${phoneNumber}`);
+                
+                // Log all participants to help debug
+                logger.info(`📋 Group has ${participants.length} participants:`);
+                participants.forEach((p, index) => {
+                    const participantNumber = p.id._serialized.split('@')[0];
+                    const pIdUser = p.id.user || 'N/A';
+                    const adminStatus = p.isAdmin || p.isSuperAdmin;
+                    logger.info(`  ${index + 1}. ID: ${p.id._serialized} | user: ${pIdUser} | admin: ${adminStatus}`);
+                });
+                
+                // Try to find a participant with this phone number
+                for (const p of participants) {
+                    const participantNumber = p.id._serialized.split('@')[0];
+                    const pIdUser = p.id.user;
+                    
+                    logger.info(`🔍 Comparing: phoneNumber=${phoneNumber} vs participantNumber=${participantNumber} vs pIdUser=${pIdUser}`);
+                    
+                    if (participantNumber === phoneNumber || pIdUser === phoneNumber) {
+                        const isAdminStatus = p.isAdmin || p.isSuperAdmin;
+                        logger.info(`✅ Matched @lid to participant ${p.id._serialized}, admin: ${isAdminStatus}`);
+                        return isAdminStatus;
+                    }
+                }
             }
 
+            logger.warn(`❌ Could not resolve linked device ID to participant: ${userId}`);
             return false;
         }
 

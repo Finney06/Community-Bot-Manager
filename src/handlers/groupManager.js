@@ -82,7 +82,7 @@ export async function handleGroupJoin(notification, client) {
 async function notifyAdmins(adminIds, groupData, client) {
     const welcomeMessage = `👋 *WhatsApp Community Manager Bot*
 
-Hello! I've been added to your group *${groupName}* and I'm ready to help you manage your community.
+Hello! I've been added to your group *${groupData.name}* and I'm ready to help you manage your community.
 
 🤖 *What I Do:*
 • Detect and warn spam/flooding
