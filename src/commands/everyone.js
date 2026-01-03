@@ -98,49 +98,18 @@ export async function handleEveryoneCommand(message, chat, client) {
         lastUsedCache.set(groupId, now);
         logEveryoneUsage(groupId, authorId);
 
-        // 5. Get all participants
+        // 5. Get all participants (excluding bot)
         const participants = chat.participants;
-
-        // Filter out the bot itself
         const filteredParticipants = participants.filter(p => p.id._serialized !== client.info.wid._serialized);
 
-        // 6. Build the Clean Announcement
-        const announcement = message.body.replace(/@everyone/i, '').trim() || '📢 Attention everyone!';
+        // 6. Create mention list
+        const mentions = filteredParticipants.map(p => p.id._serialized);
 
-        const cleanMessage = `🔔 *GROUP ANNOUNCEMENT* 🔔
+        // 7. Send minimal message with invisible mentions
+        // Just a single character - all members get mentioned without clutter
+        await chat.sendMessage('📢', { mentions: mentions });
 
-${announcement}
-
-_Sent by admin_`;
-
-        // 7. Mention via Metadata (Clutter-Free)
-        // We use the serialized IDs directly in the mentions array. 
-        // This triggers the "You were mentioned" notification for everyone
-        // without showing a long list of numbers in the message body.
-        const mentionIds = filteredParticipants.map(p => p.id._serialized);
-
-        // WhatsApp allows hundreds of metadata mentions. 
-        // For extremely large groups, we batch at 100 for absolute safety.
-        const batchSize = 100;
-
-        if (mentionIds.length <= batchSize) {
-            await chat.sendMessage(cleanMessage, { mentions: mentionIds });
-        } else {
-            // Send main message first
-            await chat.sendMessage(cleanMessage);
-
-            // Send invisible batches for the remaining (minimalist text)
-            for (let i = 0; i < mentionIds.length; i += batchSize) {
-                const batch = mentionIds.slice(i, i + batchSize);
-                await chat.sendMessage('🔔', { mentions: batch });
-
-                if (i + batchSize < mentionIds.length) {
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-                }
-            }
-        }
-
-        logger.info(`✓ @everyone announcement sent successfully to ${mentionIds.length} members`);
+        logger.info(`✓ @everyone: ${mentions.length} members notified in ${chat.name}`);
 
     } catch (error) {
         logger.error('Error in @everyone command:', error);
